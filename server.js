@@ -1,3 +1,4 @@
+require('dotenv').config();
 const cors = require('cors');
 const express = require('express');
 const http = require('http');
@@ -13,12 +14,12 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*",  // Allow all origins (or restrict to your frontend URL)
+    origin: "*",  // Adjust this to your frontend origin in production
     methods: ["GET", "POST"],
   }
 });
 
-const uri = process.env.MONGODB_URI;
+const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
 
 async function run() {
@@ -29,17 +30,41 @@ async function run() {
     const db = client.db('chatappdb');
     const messagesCollection = db.collection('messages');
 
-    app.use(express.static('../frontend'));
+    app.use(express.static('../frontend')); // Serve frontend if needed
+
+    // No /upload route needed anymore!
 
     io.on('connection', async (socket) => {
       console.log('a user connected');
 
+      // Send chat history on new connection
       const messages = await messagesCollection.find({}).toArray();
-      socket.emit('chat history', messages.map(m => ({ text: m.text, sender: m.sender })));
+      socket.emit('chat history', messages);
 
+      // Handle new chat message with optional base64 file data
       socket.on('chat message', async (msg) => {
-        await messagesCollection.insertOne({ ...msg, createdAt: new Date() });
-        io.emit('chat message', msg);
+        const fullMsg = {
+          sender: msg.sender || 'Anonymous',
+          text: msg.text || '',
+          fileData: msg.fileData || null, // base64 string or null
+          fileType: msg.fileType || null, // mime type or null
+          createdAt: new Date().toISOString(),
+        };
+
+        try {
+          await messagesCollection.insertOne(fullMsg);
+          io.emit('chat message', fullMsg);
+        } catch (err) {
+          console.error('Error saving message:', err);
+        }
+      });
+
+      socket.on('typing', (name) => {
+        socket.broadcast.emit('typing', name);
+      });
+
+      socket.on('stop typing', (name) => {
+        socket.broadcast.emit('stop typing', name);
       });
 
       socket.on('disconnect', () => {
